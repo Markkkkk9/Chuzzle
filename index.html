@@ -40,6 +40,13 @@
       font-size: 40px; color: #7bd88f;
       transform: translate(-50%, -50%);
     }
+    #levels { display: flex; gap: 6px; }
+    #levels button { padding: 4px 12px; }
+    #levels button.current { background: #f0e6d2; color: #1b1b2f; }
+    #levels button.done::after { content: " \2713"; color: #7bd88f; }
+    #levels button.current.done::after { color: #2d8a46; }
+    #legend { display: flex; gap: 16px; font-size: 0.85rem; opacity: 0.8; }
+    #legend i { display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px; }
     #buttons { display: flex; gap: 8px; }
     button {
       font: inherit; padding: 8px 16px; cursor: pointer;
@@ -54,18 +61,24 @@
 </head>
 <body>
   <h1>CHUZZLE</h1>
+  <div id="levels"></div>
   <div id="hud">
     <span id="level-name"></span>
     <span id="moves"></span>
     <span id="current-piece"></span>
   </div>
   <canvas id="board"></canvas>
+  <div id="legend">
+    <span><i style="border: 3px dashed #1f6fd1; box-sizing: border-box"></i>Start</span>
+    <span><i style="border: 3px solid #ffd84a; box-sizing: border-box"></i>Selected (your piece after your planned moves)</span>
+  </div>
   <div id="tray"><span id="tray-label">Helpers:</span></div>
   <div id="buttons">
     <button id="run">Run</button>
     <button id="undo">Undo step</button>
     <button id="clear">Clear route</button>
     <button id="reset">Reset level</button>
+    <button id="next" hidden>Next level</button>
   </div>
   <div id="message"></div>
   <script type="module" src="./js/main.js"></script>

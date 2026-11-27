@@ -212,9 +212,38 @@ for (const level of LEVELS) {
   });
 
   test(`level "${level.name}" has several winning placements but not all`, () => {
-    const total = level.tray.length ? countSolutions(level) : 0;
+    const { wins: total } = level.tray.length ? countSolutions(level) : { wins: 0 };
     assert.ok(total > 0);
     const cells = level.width * level.height - 1 - level.enemies.length;
     assert.ok(total < cells ** level.tray.length, 'puzzle should not be solved by any placement');
   });
 }
+
+for (const level of LEVELS) {
+  test(`level "${level.name}" has a valid layout`, () => {
+    const pieces = [level.player, ...level.enemies];
+    for (const p of pieces) {
+      assert.ok(p.x >= 0 && p.y >= 0 && p.x < level.width && p.y < level.height, `${p.type} is off the board`);
+    }
+    const cells = new Set(pieces.map((p) => `${p.x},${p.y}`));
+    assert.equal(cells.size, pieces.length, 'two pieces share a cell');
+    assert.equal(level.enemies.filter((e) => e.type === 'king').length, 1, 'exactly one enemy king');
+    assert.ok(level.moveLimit >= 1);
+    assert.ok(level.tray.length >= 1);
+  });
+
+  test(`level "${level.name}" needs every helper in its tray`, () => {
+    for (let i = 0; i < level.tray.length; i++) {
+      const without = level.tray.filter((_, j) => j !== i);
+      assert.equal(solve(level, without), null, `solvable without the ${level.tray[i]}`);
+    }
+  });
+}
+
+test('levels get bigger or harder: the number of winning placements never grows by much', () => {
+  const ratios = LEVELS.map((level) => {
+    const { wins, total } = countSolutions(level);
+    return wins / total;
+  });
+  assert.ok(ratios[ratios.length - 1] < ratios[0], 'last level should be harder than the first');
+});

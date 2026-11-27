@@ -1,20 +1,50 @@
 import { buildState, legalMoves, applyMove, canPlace } from './engine.js';
 
-function findRoute(state, route) {
+function stateKey(state) {
+  const { x, y, type, moved } = state.player;
+  const pieces = (list) => list.map((p) => `${p.type}${p.x},${p.y}`).sort().join(';');
+  return `${type}${x},${y}${moved ? 'm' : ''}|${state.movesUsed}|${pieces(state.enemies)}|${pieces(state.helpers)}`;
+}
+
+function findRoute(state, route, seen) {
   if (state.status === 'won') return route;
+  const key = stateKey(state);
+  if (seen.has(key)) return null;
+  seen.add(key);
   for (const move of legalMoves(state)) {
     const result = applyMove(state, move.x, move.y);
-    const found = findRoute(result.state, [...route, { x: move.x, y: move.y }]);
+    const found = findRoute(result.state, [...route, { x: move.x, y: move.y }], seen);
     if (found) return found;
   }
   return null;
 }
 
 export function solveWithPlacements(level, placements) {
-  return findRoute(buildState(level, placements), []);
+  return findRoute(buildState(level, placements), [], new Set());
 }
 
-// Tries every way of placing any subset of the tray (distinct types only once per slot) on empty cells.
+// Shortest winning route length for a placement, or null.
+export function shortestRoute(level, placements) {
+  let frontier = [{ state: buildState(level, placements), route: [] }];
+  const seen = new Set();
+  while (frontier.length) {
+    const next = [];
+    for (const { state, route } of frontier) {
+      if (state.status === 'won') return route;
+      const key = stateKey(state);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      for (const move of legalMoves(state)) {
+        const result = applyMove(state, move.x, move.y);
+        next.push({ state: result.state, route: [...route, { x: move.x, y: move.y }] });
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+// Tries every way of placing the tray on empty cells. Helpers may be left unused.
 export function solve(level, tray = level.tray) {
   function place(index, placements) {
     if (index === tray.length) {
@@ -35,11 +65,18 @@ export function solve(level, tray = level.tray) {
   return place(0, []);
 }
 
+// Counts placements of the whole tray that can win, and the total number of placements.
 export function countSolutions(level, tray = level.tray) {
-  let count = 0;
+  let wins = 0;
+  let total = 0;
+  const winning = [];
   function place(index, placements) {
     if (index === tray.length) {
-      if (solveWithPlacements(level, placements)) count += 1;
+      total += 1;
+      if (solveWithPlacements(level, placements)) {
+        wins += 1;
+        winning.push(placements);
+      }
       return;
     }
     for (let y = 0; y < level.height; y++) {
@@ -49,5 +86,17 @@ export function countSolutions(level, tray = level.tray) {
     }
   }
   place(0, []);
-  return count;
+  return { wins, total, winning };
+}
+
+// Which tray pieces are actually needed in at least one winning placement of the full tray.
+export function minimumHelpers(level) {
+  let best = null;
+  const { winning } = countSolutions(level);
+  for (const placements of winning) {
+    const route = shortestRoute(level, placements);
+    const used = route ? route.length : Infinity;
+    if (!best || used < best.length) best = { placements, length: used };
+  }
+  return best;
 }

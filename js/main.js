@@ -4,15 +4,16 @@ import { buildState, legalMoves, simulateRoute, canPlace, trayRemaining } from '
 const CELL = 80;
 const GLYPH = { king: '♚', queen: '♛', rook: '♜', bishop: '♝', knight: '♞', pawn: '♟\uFE0E' };
 const COLORS = { player: '#6fb7ff', enemy: '#ff7b7b', helper: '#7bd88f' };
+const START_COLOR = '#1f6fd1';
+const SELECT_COLOR = '#ffd84a';
 const STEP_MS = 600;
+const STORAGE_KEY = 'chuzzle.completed';
 
-const level = LEVELS[0];
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
-canvas.width = level.width * CELL;
-canvas.height = level.height * CELL;
 
 const el = {
+  levels: document.getElementById('levels'),
   levelName: document.getElementById('level-name'),
   moves: document.getElementById('moves'),
   currentPiece: document.getElementById('current-piece'),
@@ -22,16 +23,35 @@ const el = {
   undo: document.getElementById('undo'),
   clear: document.getElementById('clear'),
   reset: document.getElementById('reset'),
+  next: document.getElementById('next'),
 };
 
+let levelIndex = 0;
+let level = LEVELS[0];
 let placements = [];
 let route = [];
 let run = null;
 let drag = null;
-let message = { text: '', kind: '' };
+
+function loadCompleted() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveCompleted(set) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
+  } catch {
+    // Storage can be unavailable (private mode); progress just won't persist.
+  }
+}
+
+const completed = loadCompleted();
 
 function setMessage(text, kind = '') {
-  message = { text, kind };
   el.message.textContent = text;
   el.message.className = kind;
 }
@@ -51,6 +71,33 @@ function truncateRoute() {
   route = route.slice(0, simulate().validCount);
 }
 
+function loadLevel(index) {
+  stopRun();
+  levelIndex = index;
+  level = LEVELS[index];
+  placements = [];
+  route = [];
+  drag = null;
+  canvas.width = level.width * CELL;
+  canvas.height = level.height * CELL;
+  setMessage('');
+  renderLevelButtons();
+  render();
+}
+
+function renderLevelButtons() {
+  el.levels.replaceChildren();
+  LEVELS.forEach((l, i) => {
+    const button = document.createElement('button');
+    button.textContent = String(i + 1);
+    button.title = l.name;
+    if (i === levelIndex) button.classList.add('current');
+    if (completed.has(i)) button.classList.add('done');
+    button.addEventListener('click', () => loadLevel(i));
+    el.levels.appendChild(button);
+  });
+}
+
 function cellFromEvent(event) {
   const rect = canvas.getBoundingClientRect();
   const x = Math.floor(((event.clientX - rect.left) / rect.width) * level.width);
@@ -59,15 +106,75 @@ function cellFromEvent(event) {
   return { x, y };
 }
 
-function drawPiece(type, x, y, color) {
+function center(x, y) {
+  return [x * CELL + CELL / 2, y * CELL + CELL / 2];
+}
+
+function drawPiece(type, x, y, color, alpha = 1) {
+  const [cx, cy] = center(x, y);
+  ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.font = `${CELL * 0.75}px serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineWidth = 4;
   ctx.strokeStyle = '#111';
-  ctx.strokeText(GLYPH[type], x * CELL + CELL / 2, y * CELL + CELL / 2 + 4);
+  ctx.strokeText(GLYPH[type], cx, cy + 4);
   ctx.fillStyle = color;
-  ctx.fillText(GLYPH[type], x * CELL + CELL / 2, y * CELL + CELL / 2 + 4);
+  ctx.fillText(GLYPH[type], cx, cy + 4);
+  ctx.restore();
+}
+
+function drawRoutePath() {
+  const points = [[level.player.x, level.player.y], ...route.map((s) => [s.x, s.y])];
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(16, 48, 90, 0.8)';
+  ctx.fillStyle = 'rgba(16, 48, 90, 0.8)';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  for (let i = 1; i < points.length; i++) {
+    const [ax, ay] = center(...points[i - 1]);
+    const [bx, by] = center(...points[i]);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    const angle = Math.atan2(by - ay, bx - ax);
+    const mx = (ax + bx) / 2;
+    const my = (ay + by) / 2;
+    ctx.beginPath();
+    ctx.moveTo(mx + Math.cos(angle) * 10, my + Math.sin(angle) * 10);
+    ctx.lineTo(mx + Math.cos(angle + 2.5) * 10, my + Math.sin(angle + 2.5) * 10);
+    ctx.lineTo(mx + Math.cos(angle - 2.5) * 10, my + Math.sin(angle - 2.5) * 10);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawStartMarker() {
+  const { x, y } = level.player;
+  ctx.save();
+  ctx.strokeStyle = START_COLOR;
+  ctx.lineWidth = 4;
+  ctx.setLineDash([10, 6]);
+  ctx.strokeRect(x * CELL + 4, y * CELL + 4, CELL - 8, CELL - 8);
+  ctx.setLineDash([]);
+  ctx.fillStyle = START_COLOR;
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('START', x * CELL + CELL / 2, y * CELL + CELL - 8);
+  ctx.restore();
+}
+
+function drawSelectedMarker(x, y) {
+  ctx.save();
+  ctx.strokeStyle = SELECT_COLOR;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(x * CELL + 3, y * CELL + 3, CELL - 6, CELL - 6);
+  ctx.restore();
 }
 
 function render() {
@@ -83,21 +190,19 @@ function render() {
   }
 
   if (planning) {
-    route.forEach((step, i) => {
-      ctx.fillStyle = 'rgba(111, 183, 255, 0.45)';
+    route.forEach((step) => {
+      ctx.fillStyle = 'rgba(111, 183, 255, 0.4)';
       ctx.fillRect(step.x * CELL, step.y * CELL, CELL, CELL);
-      ctx.fillStyle = '#10305a';
-      ctx.font = 'bold 18px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(String(i + 1), step.x * CELL + 6, step.y * CELL + 4);
     });
+    drawStartMarker();
+    drawRoutePath();
 
     if (!drag || drag.moved) {
       for (const move of legalMoves(sim.finalState)) {
+        const [mx, my] = center(move.x, move.y);
         ctx.fillStyle = 'rgba(40, 40, 40, 0.35)';
         ctx.beginPath();
-        ctx.arc(move.x * CELL + CELL / 2, move.y * CELL + CELL / 2, 9, 0, Math.PI * 2);
+        ctx.arc(mx, my, 9, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -108,25 +213,60 @@ function render() {
     const hiddenWhileDragging = planning && drag && drag.moved && drag.index === i;
     if (!hiddenWhileDragging) drawPiece(helper.type, helper.x, helper.y, COLORS.helper);
   });
-  drawPiece(shown.player.type, shown.player.x, shown.player.y, COLORS.player);
 
-  el.levelName.textContent = level.name;
+  if (planning && (!drag || drag.moved)) {
+    for (const move of legalMoves(sim.finalState)) {
+      const enemy = sim.finalState.enemies.some((p) => p.x === move.x && p.y === move.y);
+      const helper = sim.finalState.helpers.some((p) => p.x === move.x && p.y === move.y);
+      if (!enemy && !helper) continue;
+      const [mx, my] = center(move.x, move.y);
+      ctx.save();
+      ctx.strokeStyle = enemy ? '#c0392b' : '#2d8a46';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(mx, my, CELL * 0.42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  if (planning) {
+    const end = sim.finalState.player;
+    drawPiece(shown.player.type, shown.player.x, shown.player.y, COLORS.player, route.length ? 0.45 : 1);
+    if (route.length) drawPiece(end.type, end.x, end.y, COLORS.player);
+    drawSelectedMarker(end.x, end.y);
+    route.forEach((step, i) => {
+      ctx.fillStyle = '#10305a';
+      ctx.font = 'bold 18px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(String(i + 1), step.x * CELL + 6, step.y * CELL + 4);
+    });
+  } else {
+    drawPiece(shown.player.type, shown.player.x, shown.player.y, COLORS.player);
+  }
+
+  el.levelName.textContent = `Level ${levelIndex + 1}: ${level.name}`;
   const used = run ? shown.movesUsed : sim.finalState.movesUsed;
   el.moves.textContent = `Moves: ${used}/${level.moveLimit}`;
   const piece = run ? shown.player.type : sim.finalState.player.type;
-  el.currentPiece.textContent = `Piece: ${piece}`;
+  el.currentPiece.textContent = `Selected piece: ${piece}`;
 
-  el.run.disabled = !!run && !run.done ? true : route.length === 0;
-  el.undo.disabled = !!run && !run.done ? true : route.length === 0 && !run;
-  el.clear.disabled = !!run && !run.done ? true : route.length === 0 && !run;
-  el.reset.disabled = !!run && !run.done;
+  const running = !!run && !run.done;
+  el.run.disabled = running || route.length === 0;
+  el.undo.disabled = running || (route.length === 0 && !run);
+  el.clear.disabled = running || (route.length === 0 && !run);
+  el.reset.disabled = running;
+  el.next.hidden = !(run && run.done && run.states[run.states.length - 1].status === 'won' && levelIndex < LEVELS.length - 1);
 
   renderTray();
 }
 
 function renderTray() {
   const remaining = trayRemaining(level, placements);
-  const label = document.getElementById('tray-label');
+  const label = document.createElement('span');
+  label.id = 'tray-label';
+  label.textContent = 'Helpers:';
   el.tray.replaceChildren(label);
   remaining.forEach((type) => {
     const chip = document.createElement('div');
@@ -245,8 +385,17 @@ el.run.addEventListener('click', () => {
       clearInterval(run.timer);
       run.done = true;
       const final = run.states[run.states.length - 1];
-      if (final.status === 'won') setMessage('You captured the king! Level complete.', 'win');
-      else setMessage('Out of moves without capturing the king. Edit your plan and try again.', 'lose');
+      if (final.status === 'won') {
+        completed.add(levelIndex);
+        saveCompleted(completed);
+        renderLevelButtons();
+        setMessage(
+          levelIndex < LEVELS.length - 1 ? 'You captured the king! Level complete.' : 'You captured the king! You finished every level.',
+          'win',
+        );
+      } else {
+        setMessage('Out of moves without capturing the king. Edit your plan and try again.', 'lose');
+      }
     }
     render();
   }, STEP_MS);
@@ -272,4 +421,7 @@ el.reset.addEventListener('click', () => {
   render();
 });
 
-render();
+el.next.addEventListener('click', () => loadLevel(levelIndex + 1));
+
+const requested = Number(new URLSearchParams(location.search).get('level')) - 1;
+loadLevel(Number.isInteger(requested) && requested >= 0 && requested < LEVELS.length ? requested : 0);
