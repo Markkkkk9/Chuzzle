@@ -5,19 +5,69 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Chuzzle</title>
   <style>
-    html, body { height: 100%; margin: 0; }
+    html, body { margin: 0; min-height: 100%; }
     body {
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
+      gap: 12px;
+      padding: 16px;
       background: #1b1b2f;
       color: #f0e6d2;
       font-family: monospace;
+      user-select: none;
+      -webkit-user-select: none;
     }
-    h1 { font-size: 3rem; letter-spacing: 0.2em; }
+    h1 { margin: 0; font-size: 2rem; letter-spacing: 0.2em; }
+    #hud { display: flex; gap: 24px; font-size: 1.1rem; }
+    canvas { background: #000; touch-action: none; cursor: pointer; }
+    #tray { display: flex; gap: 8px; align-items: center; min-height: 64px; }
+    #tray-label { opacity: 0.7; }
+    .chip {
+      width: 56px; height: 56px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 40px; line-height: 1;
+      color: #7bd88f;
+      background: #2a2a4a;
+      border: 2px solid #7bd88f;
+      cursor: grab;
+      touch-action: none;
+    }
+    .ghost {
+      position: fixed; z-index: 10; pointer-events: none;
+      width: 56px; height: 56px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 40px; color: #7bd88f;
+      transform: translate(-50%, -50%);
+    }
+    #buttons { display: flex; gap: 8px; }
+    button {
+      font: inherit; padding: 8px 16px; cursor: pointer;
+      background: #2a2a4a; color: #f0e6d2; border: 2px solid #f0e6d2;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    #run { background: #7bd88f; color: #1b1b2f; border-color: #7bd88f; }
+    #message { min-height: 1.4em; font-size: 1.1rem; }
+    #message.win { color: #7bd88f; }
+    #message.lose { color: #ff7b7b; }
   </style>
 </head>
 <body>
   <h1>CHUZZLE</h1>
+  <div id="hud">
+    <span id="level-name"></span>
+    <span id="moves"></span>
+    <span id="current-piece"></span>
+  </div>
+  <canvas id="board"></canvas>
+  <div id="tray"><span id="tray-label">Helpers:</span></div>
+  <div id="buttons">
+    <button id="run">Run</button>
+    <button id="undo">Undo step</button>
+    <button id="clear">Clear route</button>
+    <button id="reset">Reset level</button>
+  </div>
+  <div id="message"></div>
+  <script type="module" src="./js/main.js"></script>
 </body>
 </html>

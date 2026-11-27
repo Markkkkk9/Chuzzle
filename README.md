@@ -7,3 +7,8 @@ Landing on a helper piece transforms you into it.
 Built with plain HTML, JavaScript and Canvas. Pixel art style.
 
 Play: https://markkkkk9.github.io/Chuzzle/
+
+## Development
+
+- Run locally: `npm run serve`, then open http://localhost:8000
+- Run the rules tests and level solver: `npm test` (needs Node)
