@@ -54,6 +54,12 @@
     }
     button:disabled { opacity: 0.4; cursor: default; }
     #run { background: #7bd88f; color: #1b1b2f; border-color: #7bd88f; }
+    #controls { max-width: 560px; font-size: 0.85rem; line-height: 1.6; opacity: 0.85; text-align: center; }
+    kbd {
+      display: inline-block; min-width: 1.2em; padding: 0 6px;
+      border: 1px solid #f0e6d2; border-bottom-width: 3px; border-radius: 3px;
+      background: #2a2a4a; text-align: center;
+    }
     #message { min-height: 1.4em; font-size: 1.1rem; }
     #message.win { color: #7bd88f; }
     #message.lose { color: #ff7b7b; }
@@ -81,6 +87,13 @@
     <button id="next" hidden>Next level</button>
   </div>
   <div id="message"></div>
+  <div id="controls">
+    <b>Controls</b>
+    <div>Drag a helper onto the board, then click cells to plan your route. Press Run to play it.</div>
+    <div>Red dots and red squares mark cells where an enemy would capture you. Capturing the king always wins.</div>
+    <div><kbd>R</kbd> stop the run, then press again to clear the route, then again to reset the board</div>
+    <div><kbd>Q</kbd> undo your last edit &nbsp; <kbd>E</kbd> redo it (while planning)</div>
+  </div>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>

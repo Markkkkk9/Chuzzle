@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildState, legalMoves, applyMove, simulateRoute, canPlace, trayRemaining } from '../js/engine.js';
+import { buildState, legalMoves, applyMove, simulateRoute, canPlace, trayRemaining, attackers } from '../js/engine.js';
 import { solve, solveWithPlacements, countSolutions } from '../js/solver.js';
 import { LEVELS } from '../js/levels.js';
 
@@ -246,4 +246,102 @@ test('levels get bigger or harder: the number of winning placements never grows 
     return wins / total;
   });
   assert.ok(ratios[ratios.length - 1] < ratios[0], 'last level should be harder than the first');
+});
+
+// The first enemy in these states is a filler king that is ignored when checking attacks.
+function enemyState(enemies, helpers = [], player = { type: 'rook', x: 2, y: 2 }) {
+  return buildState(
+    { name: 't', width: 5, height: 5, moveLimit: 5, player, enemies: [{ type: 'king', x: 0, y: 0 }, ...enemies], tray: [] },
+    helpers,
+  );
+}
+const attacked = (state, x, y) =>
+  attackers(state, x, y)
+    .filter((e) => e !== state.enemies[0])
+    .map((e) => e.type);
+
+test('enemy pawns attack diagonally down the board, not up or straight', () => {
+  const state = enemyState([{ type: 'pawn', x: 2, y: 1 }]);
+  assert.deepEqual(attacked(state, 1, 2), ['pawn']);
+  assert.deepEqual(attacked(state, 3, 2), ['pawn']);
+  assert.deepEqual(attacked(state, 2, 2), []);
+  assert.deepEqual(attacked(state, 1, 0), []);
+  assert.deepEqual(attacked(state, 3, 0), []);
+});
+
+test('enemy knights attack by jumping, regardless of blockers', () => {
+  const state = enemyState([{ type: 'knight', x: 2, y: 2 }, { type: 'pawn', x: 3, y: 2 }]);
+  assert.deepEqual(attacked(state, 3, 4), ['knight']);
+  assert.deepEqual(attacked(state, 3, 3), []);
+});
+
+test('enemy kings attack the 8 neighbouring cells only', () => {
+  const state = enemyState([{ type: 'king', x: 3, y: 3 }]);
+  assert.deepEqual(attacked(state, 2, 2), ['king']);
+  assert.deepEqual(attacked(state, 4, 4), ['king']);
+  assert.deepEqual(attacked(state, 1, 1), []);
+});
+
+test('enemy sliders are blocked by helpers and by other enemies', () => {
+  const rook = enemyState([{ type: 'rook', x: 4, y: 4 }]);
+  assert.deepEqual(attacked(rook, 4, 1), ['rook']);
+  const blockedByHelper = enemyState([{ type: 'rook', x: 4, y: 4 }], [{ type: 'bishop', x: 4, y: 2 }]);
+  assert.deepEqual(attacked(blockedByHelper, 4, 1), []);
+  assert.deepEqual(attacked(blockedByHelper, 4, 3), ['rook']);
+  const blockedByEnemy = enemyState([{ type: 'rook', x: 4, y: 4 }, { type: 'pawn', x: 4, y: 2 }]);
+  assert.deepEqual(attacked(blockedByEnemy, 4, 1), []);
+  const bishop = enemyState([{ type: 'bishop', x: 4, y: 4 }]);
+  assert.deepEqual(attacked(bishop, 1, 1), ['bishop']);
+  assert.deepEqual(attacked(bishop, 1, 4), []);
+  const queen = enemyState([{ type: 'queen', x: 4, y: 4 }]);
+  assert.deepEqual(attacked(queen, 4, 0), ['queen']);
+  assert.deepEqual(attacked(queen, 1, 1), ['queen']);
+  assert.deepEqual(attacked(queen, 3, 0), []);
+});
+
+test('landing on an attacked cell loses the run and records the attacker', () => {
+  const level = makeLevel({
+    moveLimit: 3,
+    player: { type: 'rook', x: 0, y: 4 },
+    enemies: [{ type: 'king', x: 4, y: 0 }, { type: 'knight', x: 2, y: 2 }],
+  });
+  const result = applyMove(buildState(level), 0, 3);
+  assert.equal(result.state.status, 'lost');
+  assert.deepEqual(result.event.lostTo, { type: 'knight', x: 2, y: 2 });
+  assert.deepEqual(legalMoves(result.state), []);
+  const safe = applyMove(buildState(level), 0, 2);
+  assert.equal(safe.state.status, 'playing');
+});
+
+test('capturing the king wins even if another enemy attacks that cell', () => {
+  const level = makeLevel({
+    player: { type: 'rook', x: 0, y: 0 },
+    enemies: [{ type: 'king', x: 2, y: 0 }, { type: 'knight', x: 3, y: 2 }],
+  });
+  const result = applyMove(buildState(level), 2, 0);
+  assert.equal(result.state.status, 'won');
+  assert.equal(result.event.lostTo, null);
+});
+
+test('a captured enemy stops attacking', () => {
+  const level = makeLevel({
+    player: { type: 'rook', x: 2, y: 4 },
+    enemies: [{ type: 'king', x: 4, y: 0 }, { type: 'rook', x: 2, y: 2 }],
+  });
+  const before = buildState(level);
+  assert.deepEqual(attackers(before, 2, 3).map((e) => e.type), ['rook']);
+  const after = applyMove(before, 2, 2);
+  assert.equal(after.state.status, 'playing');
+  assert.deepEqual(attackers(after.state, 2, 3), []);
+});
+
+test('landing on a helper removes it as a blocker, so the attack can land on you', () => {
+  const level = makeLevel({
+    player: { type: 'bishop', x: 2, y: 0 },
+    enemies: [{ type: 'king', x: 0, y: 4 }, { type: 'rook', x: 4, y: 4 }],
+  });
+  const state = buildState(level, [{ type: 'rook', x: 4, y: 2 }]);
+  const result = applyMove(state, 4, 2);
+  assert.equal(result.state.status, 'lost');
+  assert.equal(result.event.lostTo.type, 'rook');
 });

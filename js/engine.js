@@ -97,6 +97,48 @@ export function legalMoves(state) {
   return moves;
 }
 
+// Enemies that attack cell (x, y) in the given state. Enemy pawns attack diagonally down the board.
+// Sliding enemies are blocked by any enemy or helper. The player's own cell is the target, never a blocker.
+export function attackers(state, x, y) {
+  const blocked = (cx, cy) => !!pieceAt(state, cx, cy);
+  const inBounds = (cx, cy) => cx >= 0 && cy >= 0 && cx < state.width && cy < state.height;
+
+  const slides = (enemy, dirs) => {
+    for (const [dx, dy] of dirs) {
+      let cx = enemy.x + dx;
+      let cy = enemy.y + dy;
+      while (inBounds(cx, cy)) {
+        if (cx === x && cy === y) return true;
+        if (blocked(cx, cy)) break;
+        cx += dx;
+        cy += dy;
+      }
+    }
+    return false;
+  };
+
+  return state.enemies.filter((enemy) => {
+    const dx = x - enemy.x;
+    const dy = y - enemy.y;
+    switch (enemy.type) {
+      case 'pawn':
+        return dy === 1 && Math.abs(dx) === 1;
+      case 'knight':
+        return KNIGHT_JUMPS.some(([jx, jy]) => jx === dx && jy === dy);
+      case 'king':
+        return Math.max(Math.abs(dx), Math.abs(dy)) === 1;
+      case 'rook':
+        return slides(enemy, ORTHOGONAL);
+      case 'bishop':
+        return slides(enemy, DIAGONAL);
+      case 'queen':
+        return slides(enemy, [...ORTHOGONAL, ...DIAGONAL]);
+      default:
+        return false;
+    }
+  });
+}
+
 export function applyMove(state, x, y) {
   if (!legalMoves(state).some((m) => m.x === x && m.y === y)) return null;
 
@@ -106,7 +148,7 @@ export function applyMove(state, x, y) {
     enemies: state.enemies.map((e) => ({ ...e })),
     helpers: state.helpers.map((h) => ({ ...h })),
   };
-  const event = { x, y, captured: null, transformed: null, won: false };
+  const event = { x, y, captured: null, transformed: null, won: false, lostTo: null };
 
   next.player.x = x;
   next.player.y = y;
@@ -129,6 +171,14 @@ export function applyMove(state, x, y) {
     next.player.type = event.transformed;
     next.player.moved = false;
     next.helpers.splice(helperIndex, 1);
+  }
+
+  if (next.status !== 'won') {
+    const threats = attackers(next, x, y);
+    if (threats.length) {
+      next.status = 'lost';
+      event.lostTo = { type: threats[0].type, x: threats[0].x, y: threats[0].y };
+    }
   }
 
   return { state: next, event };

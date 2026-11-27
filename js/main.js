@@ -1,5 +1,5 @@
 import { LEVELS } from './levels.js';
-import { buildState, legalMoves, simulateRoute, canPlace, trayRemaining } from './engine.js';
+import { buildState, legalMoves, applyMove, simulateRoute, canPlace, trayRemaining } from './engine.js';
 
 const CELL = 80;
 const GLYPH = { king: '♚', queen: '♛', rook: '♜', bishop: '♝', knight: '♞', pawn: '♟\uFE0E' };
@@ -32,6 +32,37 @@ let placements = [];
 let route = [];
 let run = null;
 let drag = null;
+let undoStack = [];
+let redoStack = [];
+
+function snapshot() {
+  return { placements: placements.map((p) => ({ ...p })), route: route.map((r) => ({ ...r })) };
+}
+
+// Runs a change to the plan and records it so Q / E can undo and redo it.
+function edit(change) {
+  const before = snapshot();
+  change();
+  if (JSON.stringify(before) === JSON.stringify(snapshot())) return;
+  undoStack.push(before);
+  redoStack = [];
+}
+
+function undoEdit() {
+  if (!undoStack.length) return;
+  redoStack.push(snapshot());
+  const previous = undoStack.pop();
+  placements = previous.placements;
+  route = previous.route;
+}
+
+function redoEdit() {
+  if (!redoStack.length) return;
+  undoStack.push(snapshot());
+  const next = redoStack.pop();
+  placements = next.placements;
+  route = next.route;
+}
 
 function loadCompleted() {
   try {
@@ -77,6 +108,8 @@ function loadLevel(index) {
   level = LEVELS[index];
   placements = [];
   route = [];
+  undoStack = [];
+  redoStack = [];
   drag = null;
   canvas.width = level.width * CELL;
   canvas.height = level.height * CELL;
@@ -200,7 +233,8 @@ function render() {
     if (!drag || drag.moved) {
       for (const move of legalMoves(sim.finalState)) {
         const [mx, my] = center(move.x, move.y);
-        ctx.fillStyle = 'rgba(40, 40, 40, 0.35)';
+        const deadly = applyMove(sim.finalState, move.x, move.y).state.status === 'lost';
+        ctx.fillStyle = deadly ? 'rgba(192, 57, 43, 0.75)' : 'rgba(40, 40, 40, 0.35)';
         ctx.beginPath();
         ctx.arc(mx, my, 9, 0, Math.PI * 2);
         ctx.fill();
@@ -208,7 +242,17 @@ function render() {
     }
   }
 
-  for (const enemy of shown.enemies) drawPiece(enemy.type, enemy.x, enemy.y, COLORS.enemy);
+  const capture = run && run.capture ? run.capture : null;
+  const progress = capture ? Math.min(1, (performance.now() - capture.start) / capture.duration) : 0;
+  for (const enemy of shown.enemies) {
+    if (capture && enemy.x === capture.enemy.x && enemy.y === capture.enemy.y) continue;
+    drawPiece(enemy.type, enemy.x, enemy.y, COLORS.enemy);
+  }
+  if (capture) {
+    const ex = capture.enemy.x + (shown.player.x - capture.enemy.x) * progress;
+    const ey = capture.enemy.y + (shown.player.y - capture.enemy.y) * progress;
+    drawPiece(capture.enemy.type, ex, ey, COLORS.enemy);
+  }
   shown.helpers.forEach((helper, i) => {
     const hiddenWhileDragging = planning && drag && drag.moved && drag.index === i;
     if (!hiddenWhileDragging) drawPiece(helper.type, helper.x, helper.y, COLORS.helper);
@@ -242,8 +286,17 @@ function render() {
       ctx.textBaseline = 'top';
       ctx.fillText(String(i + 1), step.x * CELL + 6, step.y * CELL + 4);
     });
-  } else {
+  } else if (!(capture && progress >= 1)) {
     drawPiece(shown.player.type, shown.player.x, shown.player.y, COLORS.player);
+  }
+
+  if (planning && sim.finalState.status === 'lost') {
+    const attacker = sim.events[sim.events.length - 1].lostTo;
+    ctx.save();
+    ctx.strokeStyle = '#c0392b';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(attacker.x * CELL + 3, attacker.y * CELL + 3, CELL - 6, CELL - 6);
+    ctx.restore();
   }
 
   el.levelName.textContent = `Level ${levelIndex + 1}: ${level.name}`;
@@ -340,18 +393,20 @@ window.addEventListener('pointerup', (event) => {
     return;
   }
 
-  if (finished.from === 'tray') {
-    if (cell && canPlace(level, placements, cell.x, cell.y)) {
-      placements.push({ type: finished.type, x: cell.x, y: cell.y });
+  edit(() => {
+    if (finished.from === 'tray') {
+      if (cell && canPlace(level, placements, cell.x, cell.y)) {
+        placements.push({ type: finished.type, x: cell.x, y: cell.y });
+        truncateRoute();
+      }
+    } else if (!cell) {
+      placements.splice(finished.index, 1);
+      truncateRoute();
+    } else if (canPlace(level, placements, cell.x, cell.y, finished.index)) {
+      placements[finished.index] = { ...placements[finished.index], x: cell.x, y: cell.y };
       truncateRoute();
     }
-  } else if (!cell) {
-    placements.splice(finished.index, 1);
-    truncateRoute();
-  } else if (canPlace(level, placements, cell.x, cell.y, finished.index)) {
-    placements[finished.index] = { ...placements[finished.index], x: cell.x, y: cell.y };
-    truncateRoute();
-  }
+  });
   render();
 });
 
@@ -362,6 +417,10 @@ function tryAddStep(cell) {
     setMessage('The king is already captured. Press Run!', 'win');
     return;
   }
+  if (end.status === 'lost') {
+    setMessage('An enemy would capture you there. Undo that step (Q) or change your plan.', 'lose');
+    return;
+  }
   if (end.movesUsed >= level.moveLimit) {
     setMessage('No moves left. Undo a step to change your route.', 'lose');
     return;
@@ -370,32 +429,59 @@ function tryAddStep(cell) {
     setMessage(`A ${end.player.type} cannot move there.`, 'lose');
     return;
   }
-  route.push({ x: cell.x, y: cell.y });
-  setMessage('');
+  edit(() => route.push({ x: cell.x, y: cell.y }));
+  const after = simulate().finalState;
+  if (after.status === 'lost') {
+    setMessage(`Danger: the enemy ${simulate().events.at(-1).lostTo.type} would capture you on that cell.`, 'lose');
+  } else {
+    setMessage('');
+  }
+}
+
+function finishRun(thisRun) {
+  const final = thisRun.states[thisRun.states.length - 1];
+  if (final.status === 'won') {
+    thisRun.done = true;
+    completed.add(levelIndex);
+    saveCompleted(completed);
+    renderLevelButtons();
+    setMessage(
+      levelIndex < LEVELS.length - 1 ? 'You captured the king! Level complete.' : 'You captured the king! You finished every level.',
+      'win',
+    );
+  } else if (final.status === 'lost') {
+    const attacker = thisRun.events[thisRun.events.length - 1].lostTo;
+    thisRun.capture = { enemy: attacker, start: performance.now(), duration: 600 };
+    setMessage(`Captured by the enemy ${attacker.type}!`, 'lose');
+    const animate = () => {
+      if (run !== thisRun) return;
+      render();
+      if (performance.now() - thisRun.capture.start < thisRun.capture.duration) {
+        requestAnimationFrame(animate);
+      } else {
+        thisRun.done = true;
+        setMessage(`Captured by the enemy ${attacker.type}! Press R to try again.`, 'lose');
+        render();
+      }
+    };
+    requestAnimationFrame(animate);
+  } else {
+    thisRun.done = true;
+    setMessage('Out of moves without capturing the king. Edit your plan and try again.', 'lose');
+  }
 }
 
 el.run.addEventListener('click', () => {
   stopRun();
   const sim = simulate();
-  run = { states: sim.states, index: 0, done: false, timer: null };
+  run = { states: sim.states, events: sim.events, index: 0, done: false, timer: null, capture: null };
   setMessage('Running...');
+  const thisRun = run;
   run.timer = setInterval(() => {
-    run.index += 1;
-    if (run.index >= run.states.length - 1) {
-      clearInterval(run.timer);
-      run.done = true;
-      const final = run.states[run.states.length - 1];
-      if (final.status === 'won') {
-        completed.add(levelIndex);
-        saveCompleted(completed);
-        renderLevelButtons();
-        setMessage(
-          levelIndex < LEVELS.length - 1 ? 'You captured the king! Level complete.' : 'You captured the king! You finished every level.',
-          'win',
-        );
-      } else {
-        setMessage('Out of moves without capturing the king. Edit your plan and try again.', 'lose');
-      }
+    thisRun.index += 1;
+    if (thisRun.index >= thisRun.states.length - 1) {
+      clearInterval(thisRun.timer);
+      finishRun(thisRun);
     }
     render();
   }, STEP_MS);
@@ -404,21 +490,57 @@ el.run.addEventListener('click', () => {
 
 el.undo.addEventListener('click', () => {
   stopRun();
-  route.pop();
+  edit(() => route.pop());
   render();
 });
 
 el.clear.addEventListener('click', () => {
   stopRun();
-  route = [];
+  edit(() => {
+    route = [];
+  });
   render();
 });
 
 el.reset.addEventListener('click', () => {
   stopRun();
-  placements = [];
-  route = [];
+  edit(() => {
+    placements = [];
+    route = [];
+  });
   render();
+});
+
+// R steps back one stage at a time: stop the run, then clear the route, then reset the board.
+function pressR() {
+  if (run) {
+    stopRun();
+  } else if (route.length) {
+    edit(() => {
+      route = [];
+    });
+  } else if (placements.length) {
+    edit(() => {
+      placements = [];
+    });
+  }
+  render();
+}
+
+window.addEventListener('keydown', (event) => {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+  if (drag && drag.moved) return;
+  const key = event.key.toLowerCase();
+  if (key === 'r') {
+    pressR();
+  } else if (key === 'q' || key === 'e') {
+    if (run && !run.done) return;
+    stopRun();
+    if (key === 'q') undoEdit();
+    else redoEdit();
+    truncateRoute();
+    render();
+  }
 });
 
 el.next.addEventListener('click', () => loadLevel(levelIndex + 1));
